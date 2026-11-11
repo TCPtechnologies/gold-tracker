@@ -13,7 +13,8 @@ export const DEFAULTS = {
   invested: 499975.001,
   buyNav: 49.16,
   units: null,
-  usMultiplier: 1,
+  useMultiplier: false,       // apply the trailing 20-day SBIGOLD/gold multiplier to the US-gold estimates
+  multiplierMethod: 'weighted', // 'weighted' (by the size of gold's move) or 'simple' (plain average of ratios)
   buyCutoff: 14 * 60,
   redeemCutoff: 15 * 60,
   extraHolidays: '',

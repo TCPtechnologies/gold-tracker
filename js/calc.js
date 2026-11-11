@@ -2,7 +2,7 @@
 // Same rules as the Android app (Calc.kt).
 import {
   CLOSE, OPEN, VWAP_FROM, ist, istMs, isTradingDay, nextTradingDay, prevTradingDay, lastClosedSession,
-  inSession, navDeadline, orderNavs,
+  navDeadline, orderNavs,
 } from './market.js';
 import { fmtClock } from './fmt.js';
 
@@ -12,7 +12,6 @@ export const BASIS = {
   APPROX_CLOSE: 'ETF closing price worked out from the 3:00–3:30 pm trades',
   CLOSE: 'ETF closing price',
   OFFICIAL: 'official NSE closing price',
-  US_GOLD: 'ETF price implied by US gold (XAU/USD) since the last 3:30 pm close',
 };
 
 /** NSE close of an ETF: volume-weighted average price of 3:00-3:30 pm trades, from 5-minute candles. */
@@ -54,6 +53,28 @@ function goldDays(etfDays, spots, refDay, refClose) {
     });
   }
   return out;
+}
+
+export const TRAILING_DAYS = 20;
+export const MIN_PAIRS = 5;
+
+/**
+ * Multiplier over the latest 20 sessions (19 day-to-day comparisons): how much SBIGOLD moved for each 1% of
+ * gold. "simple" = average of the daily ratios (SBIGOLD % ÷ gold %). "weighted" = the same ratios weighted by
+ * the size of gold's move (least squares through zero), so a day when gold barely moved cannot swing it.
+ */
+export function trailingMultiplier(days) {
+  const w = days.slice(0, TRAILING_DAYS - 1);
+  const ratios = w.filter((d) => Math.abs(d.xauPct) > 1e-9).map((d) => d.etfPct / d.xauPct);
+  const sxx = w.reduce((a, d) => a + d.xauPct * d.xauPct, 0);
+  return {
+    n: w.length,
+    from: w.length ? w[w.length - 1].prev : null,
+    to: w.length ? w[0].date : null,
+    simple: ratios.length ? ratios.reduce((a, v) => a + v, 0) / ratios.length : null,
+    weighted: sxx > 1e-12 ? w.reduce((a, d) => a + d.etfPct * d.xauPct, 0) / sxx : null,
+    approx: w.some((d) => d.approx),
+  };
 }
 
 export const predictedOpen = (g, m) => (g.xauOpen == null ? null : g.etfPrevClose * (1 + m * (g.xauOpen / g.xauPrev - 1)));
@@ -162,38 +183,49 @@ export function buildSnapshot({ s, navs, etfDays, candles, quote, n, spotNow, an
     }
   }
 
+  for (const e of estimates) {
+    e.isToday = e.basis === 'LIVE' || e.basis === 'VWAP_SO_FAR';
+    e.publishBy = navDeadline(e.date);
+  }
+
   // ---- US gold (XAU/USD) ----
-  const m = s.usMultiplier;
+  // Comparison of each session's SBIGOLD close-to-close change with gold's 3:30-to-3:30 pm change.
   const refDay = lastClosedSession(n);
   const lastEst = estimates[estimates.length - 1];
   let chainClose = null;
   if (lastEst && lastEst.date === refDay) chainClose = lastEst.etfPrice;
   else if (base && base.date === refDay && !estimates.length) chainClose = base.c;
   const refClose = chainClose ?? etfDays.find((d) => d.date === refDay)?.c ?? null;
+  const days = goldDays(etfDays, anchors, refDay, refClose);
+  const mult = trailingMultiplier(days);
+  const m = s.useMultiplier && mult.n >= MIN_PAIRS ? (s.multiplierMethod === 'simple' ? mult.simple : mult.weighted) : 1;
+
+  // SBIGOLD price implied by gold's move since the last 3:30 pm close (a guide to the next opening price).
   const refSpot = nearestSpot(anchors, istMs(refDay, CLOSE));
   const changePct = spotNow && refSpot ? (spotNow.price / refSpot.price - 1) * 100 : null;
   const equivalent = refClose != null && changePct != null ? refClose * (1 + (m * changePct) / 100) : null;
-  const usDate = nextTradingDay(refDay);
-  if (!inSession(n) && latest && base && chainClose != null && equivalent != null && spotNow &&
-      !estimates.some((e) => e.date === usDate) && usDate > latest.date) {
-    const nav = (latest.nav * equivalent) / base.c;
-    estimates.push({ date: usDate, nav, changePct: (equivalent / chainClose - 1) * 100, etfPrice: equivalent, etfPrevClose: chainClose, basis: 'US_GOLD', asOf: spotNow.ts, ...plOf(nav * units) });
-  }
-  for (const e of estimates) {
-    e.isToday = e.basis === 'LIVE' || e.basis === 'VWAP_SO_FAR';
-    e.fromUs = e.basis === 'US_GOLD';
-    e.publishBy = navDeadline(e.date);
-  }
-  const days = goldDays(etfDays, anchors, refDay, refClose);
-  const gold = { now: spotNow, refDay, refSpot, refClose, changePct, equivalent, multiplier: m, days, fit: goldFit(days, m) };
 
-  const etfEstimates = estimates.filter((e) => !e.fromUs);
-  const lastEtf = etfEstimates[etfEstimates.length - 1];
+  // Likely NAV from US gold alone: latest published NAV × gold now ÷ gold at 3:30 pm of that NAV's day.
+  // It is for today until the 3:30 pm close, then for the next session.
+  let goldEst = null;
+  const navGoldDay = latest ? (isTradingDay(latest.date) ? latest.date : prevTradingDay(latest.date)) : null;
+  const navGold = navGoldDay ? nearestSpot(anchors, istMs(navGoldDay, CLOSE)) : null;
+  const target = nextTradingDay(refDay);
+  if (latest && navGold && spotNow && target > latest.date) {
+    const g = spotNow.price / navGold.price - 1;
+    const nav = latest.nav * (1 + m * g);
+    goldEst = {
+      date: target, nav, nav1: latest.nav * (1 + g), pct: (nav / latest.nav - 1) * 100, goldPct: g * 100, m,
+      ref: navGold, refDay: navGoldDay, asOf: spotNow.ts, publishBy: navDeadline(target), ...plOf(nav * units),
+    };
+  }
+  const gold = { now: spotNow, refDay, refSpot, refClose, changePct, equivalent, multiplier: m, mult, days, fit: goldFit(days, m), est: goldEst };
+
+  const lastEtf = estimates[estimates.length - 1];
   return {
-    n, s, latest, previous, units, value, pl, plPct, navChange, navChangePct, estimates, etfEstimates,
-    usEstimate: estimates.find((e) => e.fromUs) || null,
+    n, s, latest, previous, units, value, pl, plPct, navChange, navChangePct, estimates, etfEstimates: estimates, goldEst,
     live: lastEtf && lastEtf.date === today && lastEtf.basis !== 'CLOSE' && lastEtf.basis !== 'OFFICIAL' ? lastEtf : null,
-    estimateFor: (d) => estimates.find((e) => e.date === d) || null,
+    estimateFor: (d) => estimates.find((e) => e.date === d) || (goldEst && goldEst.date === d ? { ...goldEst, fromUs: true } : null),
     base, quote, todayQuote: q, todayCandles, etfPrevClose,
     orders: orderNavs(n, s.buyCutoff, s.redeemCutoff, fmtClock),
     accuracy: accuracy(navs, etfDays),

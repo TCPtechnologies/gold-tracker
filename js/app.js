@@ -123,14 +123,15 @@ function fillForm(s) {
   form.buyNav.value = s.buyNav;
   form.units.value = s.units ?? '';
   form.units.placeholder = s.buyNav > 0 ? `${(s.invested / s.buyNav).toFixed(4)} from amount ÷ NAV` : '';
-  form.usMultiplier.value = s.usMultiplier;
+  form.useMultiplier.checked = !!s.useMultiplier;
+  form.multiplierMethod.value = s.multiplierMethod === 'simple' ? 'simple' : 'weighted';
   form.buyCutoff.value = hhmm(s.buyCutoff);
   form.redeemCutoff.value = hhmm(s.redeemCutoff);
   form.extraHolidays.value = s.extraHolidays;
   document.getElementById('settings-error').textContent = '';
-  const fit = snapshot().gold?.fit;
-  document.getElementById('fit-hint').textContent = fit && fit.slope != null && fit.n >= 5
-    ? `Best fit over ${fit.n} sessions so far: ${fit.slope.toFixed(2)}.` : '';
+  const mu = snapshot().gold?.mult;
+  document.getElementById('fit-hint').textContent = mu && mu.n && mu.weighted != null && mu.simple != null
+    ? `Now (${mu.n} comparisons): weighted ${mu.weighted.toFixed(2)}, simple average ${mu.simple.toFixed(2)}.` : '';
 }
 
 document.getElementById('open-settings').addEventListener('click', () => { fillForm(settings); dlg.showModal(); });
@@ -141,18 +142,19 @@ form.addEventListener('submit', (ev) => {
   ev.preventDefault();
   const fail = (m) => { document.getElementById('settings-error').textContent = m; };
   const invested = numOrNull(form.invested.value), buyNav = numOrNull(form.buyNav.value), units = numOrNull(form.units.value);
-  const mult = numOrNull(form.usMultiplier.value);
   if (!(invested > 0)) return fail('Amount invested: enter a positive number.');
   if (!(buyNav > 0)) return fail('Buy NAV: enter a positive number.');
   if (units !== null && !(units > 0)) return fail('Units: enter a positive number, or leave it empty.');
-  if (mult === null || !(mult >= 0 && mult <= 3)) return fail('Multiplier: enter a number from 0 to 3, for example 1 or 0.85.');
   const tm = (v) => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(v).trim()); return m && +m[1] < 24 && +m[2] < 60 ? +m[1] * 60 + +m[2] : null; };
   const bc = tm(form.buyCutoff.value), rc = tm(form.redeemCutoff.value);
   if (bc === null) return fail('Buy cut-off: use HH:MM, for example 14:00.');
   if (rc === null) return fail('Redeem cut-off: use HH:MM, for example 15:00.');
   const h = parseHolidays(form.extraHolidays.value);
   if (h.bad.length) return fail(`Holidays: these are not dates in yyyy-mm-dd form: ${h.bad.join(', ')}`);
-  settings = { invested, buyNav, units, usMultiplier: mult, buyCutoff: bc, redeemCutoff: rc, extraHolidays: form.extraHolidays.value.trim() };
+  settings = {
+    invested, buyNav, units, buyCutoff: bc, redeemCutoff: rc, extraHolidays: form.extraHolidays.value.trim(),
+    useMultiplier: form.useMultiplier.checked, multiplierMethod: form.multiplierMethod.value,
+  };
   saveSettings(settings);
   applyHolidays();
   dlg.close();

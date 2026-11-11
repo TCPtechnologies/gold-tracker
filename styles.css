@@ -52,7 +52,9 @@ b { font-weight: 650; }
 .row .val.b { font-weight: 700; }
 
 .mf { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); }
-.mf.hl { background: var(--warn-bg); border: 2px solid var(--gold); border-radius: 8px; padding: 7px 8px; margin: 3px 0; }
+.mf-box { border: 1.5px solid var(--gold-dark); border-radius: 10px; padding: 0 10px; margin: 8px 0; }
+.mf-box .mf:last-child { border-bottom: none; }
+.mf-box.hl { background: var(--warn-bg); border: 2px solid var(--gold); }
 .mf-l { color: var(--muted); font-size: 13.5px; }
 .mf-v { font-weight: 700; font-size: 15.5px; }
 .mf-n { color: var(--muted); font-size: 12px; margin-top: 2px; }
@@ -89,7 +91,9 @@ dialog form { padding: 14px 16px 16px; }
 .dlg-head h2 { margin: 0; color: var(--gold); }
 dialog h3 { color: var(--gold); font-size: 14px; margin: 18px 0 2px; }
 dialog label { display: block; color: var(--muted); font-size: 13px; margin-top: 10px; }
-dialog input, dialog textarea {
+dialog label.check { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 14px; }
+dialog label.check input { width: auto; margin: 0; }
+dialog input, dialog textarea, dialog select {
   display: block; width: 100%; margin-top: 4px; font: inherit; color: var(--text);
   background: #0F1218; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
 }

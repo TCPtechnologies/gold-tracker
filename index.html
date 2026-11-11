@@ -39,8 +39,14 @@
       <label>Units (optional)<input name="units" inputmode="decimal"></label>
 
       <h3>US gold (XAU/USD)</h3>
-      <p class="hint">After the 3:30 pm close the page assumes SBIGOLD's change = multiplier × gold's change since 3:30 pm. 1 = moves 1:1. <span id="fit-hint"></span></p>
-      <label>Multiplier<input name="usMultiplier" inputmode="decimal"></label>
+      <p class="hint">The US-gold estimates assume SBIGOLD moves 1:1 with gold, unless you apply the multiplier worked out from the last 20 sessions (SBIGOLD's daily change ÷ gold's 3:30 pm to 3:30 pm change). <span id="fit-hint"></span></p>
+      <label class="check"><input type="checkbox" name="useMultiplier"> Apply the 20-day multiplier</label>
+      <label>How to average the 19 daily ratios
+        <select name="multiplierMethod">
+          <option value="weighted">Weighted by the size of gold's move (recommended)</option>
+          <option value="simple">Simple average</option>
+        </select>
+      </label>
 
       <h3>Coin order cut-offs</h3>
       <p class="hint" id="cutoff-hint"></p>

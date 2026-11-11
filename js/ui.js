@@ -1,11 +1,11 @@
 // Screen rendering: the same sections as the Android app.
 import { FUND_NAME, FUND_SHORT, ETF_NAME, ETF_SYMBOL, ISIN } from './config.js';
-import { CLOSE, OPEN, ist, inSession, isTradingDay, nextTradingDay, navDeadline, clockShifted, holidayYears } from './market.js';
+import { CLOSE, OPEN, ist, inSession, isTradingDay, nextTradingDay, lastClosedSession, navDeadline, clockShifted, holidayYears } from './market.js';
 import {
   esc, fmtInr, fmtNum, fmtSigned, fmtPct, fmtNav, fmtPrice, fmtUsd, fmtDay, fmtDayLong, fmtDayShort, fmtClock,
-  fmtClockMs, fmtStamp, fmtWhen, fmtDayRel, fmtDateOrdinal, tone,
+  fmtClockMs, fmtStamp, fmtWhen, fmtDayRel, fmtDateOrdinal, fmtWeekdayOf, tone,
 } from './fmt.js';
-import { BASIS, predictedOpen } from './calc.js';
+import { BASIS, predictedOpen, TRAILING_DAYS, MIN_PAIRS } from './calc.js';
 import { state, etfDays, navSeen } from './data.js';
 
 export const view = { candleDay: null, navRows: 15, showLog: false };
@@ -91,61 +91,97 @@ function summary(snap) {
   const sub = q && inSession(n) ? `Live · ${sym} trade at ${fmtClockMs(q.time, true)} · refreshes every 10 s`
     : inSession(n) ? `Market open · waiting for the ${sym} price from the server`
     : q ? `Market closed · last ${sym} trade ${fmtClockMs(q.time, true)}` : 'Market closed';
-  const lines = [];
-  const line = (label, value, cls = '', note = '', hl = false) =>
-    lines.push(`<div class="mf ${hl ? 'hl' : ''}"><div class="mf-l">${esc(label)}</div><div class="mf-r"><div class="mf-v ${cls}">${value}</div>${note ? `<div class="mf-n">${esc(note)}</div>` : ''}</div></div>`);
+  const line = (label, value, cls = '', note = '') =>
+    `<div class="mf"><div class="mf-l">${esc(label)}</div><div class="mf-r"><div class="mf-v ${cls}">${value}</div>${note ? `<div class="mf-n">${esc(note)}</div>` : ''}</div></div>`;
+  const box = (rows, hl) => `<div class="mf-box ${hl ? 'hl' : ''}">${rows.join('')}</div>`;
 
-  const today = n.date, t = n.min;
-  const beforeCutoff = isTradingDay(today) && t < s.buyCutoff;
-  const orderDate = beforeCutoff ? today : nextTradingDay(today);
+  const today = n.date, t = n.min, trading = isTradingDay(today);
   const next = snap.etfEstimates[snap.etfEstimates.length - 1];
-  const us = snap.usEstimate;
-  const pointsUp = beforeCutoff && t >= OPEN && next?.date === orderDate;
-  const pointsToUs = !pointsUp && us && us.date === orderDate;
+  const ge = snap.goldEst;
+  const tomorrow = nextTradingDay(today);
 
-  line('MF name', esc(`${FUND_SHORT} (${ISIN})`));
-  line('Current NAV Price', `₹${fmtNav(latest.nav)}` + (snap.navChangePct != null ? ` (${fmtPct(snap.navChangePct)})` : ''), tone(snap.navChangePct));
-  line('Current NAV Date', esc(fmtDateOrdinal(latest.date)));
-  line('Total Profit/loss', `${fmtInr(snap.pl, true)} (${fmtPct(snap.plPct)})`, tone(snap.pl));
+  // Which estimate an order placed now is about: 'etf' (today's NAV while SBIGOLD trades), 'gold' (the session
+  // the US-gold estimate is for), 'guess' (tomorrow's NAV before today's close: US gold is the best guess).
+  function boxFor(cutoff) {
+    const navDate = trading && t < cutoff ? today : tomorrow;
+    if (navDate === today && trading && t >= OPEN) return { navDate, box: 'etf' };
+    if (ge && ge.date === navDate) return { navDate, box: 'gold' };
+    if (ge && trading && t < CLOSE && navDate === tomorrow) return { navDate, box: 'guess' };
+    return { navDate, box: null };
+  }
+  const buy = boxFor(s.buyCutoff), redeem = boxFor(s.redeemCutoff);
+  const hlEtf = buy.box === 'etf' || redeem.box === 'etf';
+  const hlGold = [buy.box, redeem.box].some((b) => b === 'gold' || b === 'guess');
+
+  const out = [line('MF name', esc(`${FUND_SHORT} (${ISIN})`))];
+  out.push(box([
+    line('Current NAV Price', `₹${fmtNav(latest.nav)}` + (snap.navChangePct != null ? ` (${fmtPct(snap.navChangePct)})` : ''), tone(snap.navChangePct)),
+    line('Current NAV Date', esc(fmtDateOrdinal(latest.date))),
+    line('Total Profit/loss', `${fmtInr(snap.pl, true)} (${fmtPct(snap.plPct)})`, tone(snap.pl)),
+  ], false));
+
   if (next) {
     const pct = (next.nav / latest.nav - 1) * 100;
     const basis = next.isToday ? `trade ₹${fmtPrice(next.etfPrice)} at ${next.asOf ? fmtClockMs(next.asOf, true) : ''}` : `${BASIS[next.basis]} ₹${fmtPrice(next.etfPrice)}`;
-    line('Next likely NAV (as per live/last-traded ETF price)', `₹${fmtNav(next.nav)} (${fmtPct(pct, 3)})`, tone(pct),
-      `NAV of ${fmtDay(next.date)} · ${sym} ${basis} vs ₹${fmtPrice(snap.base.c)} on ${fmtDay(snap.base.date)}`, pointsUp);
-    line('Total Profit/loss estimated after next NAV update', `${fmtInr(next.pl, true)} (${fmtPct(next.plPct)})`, tone(next.pl));
+    out.push(box([
+      line('Next likely NAV (as per live/last-traded ETF price)', `₹${fmtNav(next.nav)} (${fmtPct(pct, 3)})`, tone(pct),
+        `NAV of ${fmtDay(next.date)} · ${sym} ${basis} vs ₹${fmtPrice(snap.base.c)} on ${fmtDay(snap.base.date)}`),
+      line('Total Profit/loss estimated after next NAV update', `${fmtInr(next.pl, true)} (${fmtPct(next.plPct)})`, tone(next.pl)),
+    ], hlEtf));
   } else {
-    line('Next likely NAV (as per live/last-traded ETF price)', '–', '', `Starts with the first ${sym} trade after 9:15 am`);
-    line('Total Profit/loss estimated after next NAV update', '–');
+    const why = `${fmtDay(latest.date)}'s NAV is out; ${trading && t < OPEN ? 'today' : fmtDay(tomorrow)}'s ${sym} trading starts at 9:15 am`;
+    out.push(box([
+      line('Next likely NAV (as per live/last-traded ETF price)', '–', '', why),
+      line('Total Profit/loss estimated after next NAV update', '–'),
+    ], hlEtf));
   }
-  if (us) {
+
+  const goldLabel = (d) => `${fmtWeekdayOf(d)} likely NAV as per live US Gold spot`;
+  if (ge) {
     const g = snap.gold;
-    const pct = (us.nav / latest.nav - 1) * 100;
-    const mult = Math.abs(g.multiplier - 1) > 1e-9 ? ` × ${fmtNum(g.multiplier, 2)}` : '';
-    line(`Likely NAV of ${fmtDay(us.date)} (as per US gold since 3:30 pm)`, `₹${fmtNav(us.nav)} (${fmtPct(pct, 3)})`, tone(pct),
-      `Gold ${g.now ? fmtUsd(g.now.price) : ''} at ${fmtClockMs(us.asOf, true)}, ${fmtPct(g.changePct)}${mult} since ${fmtDay(g.refDay)} 3:30 pm → ` +
-      `${sym} ≈ ₹${fmtPrice(us.etfPrice)} vs close ₹${fmtPrice(us.etfPrevClose)}. Speculative: assumes ${sym} follows gold.`, pointsToUs);
-    line('Total Profit/loss estimated after that NAV', `${fmtInr(us.pl, true)} (${fmtPct(us.plPct)})`, tone(us.pl));
-  }
-  let text, note, cls = '';
-  if (pointsUp) {
-    text = '↑ the Next likely NAV above'; cls = 'gold';
-    note = `Today's NAV (${fmtDay(today)}) if you buy before ${fmtClock(s.buyCutoff)} with UPI or direct-settlement netbanking, ` +
-      `or redeem before ${fmtClock(s.redeemCutoff)}. It keeps moving with ${sym} until the 3:30 pm close.`;
-  } else if (pointsToUs) {
-    text = '↑ the US-gold based NAV above (speculative)'; cls = 'gold';
-    note = `A buy now gets the NAV of ${fmtDayRel(orderDate)}. Until ${sym} trades at 9:15 am, US gold is the only hint; ` +
-      `it moves with gold until then, and the real NAV depends on ${fmtDay(orderDate)}'s trading.`;
-  } else if (beforeCutoff) {
-    text = 'Please wait for 9:15am today to even begin speculating';
-    note = `A buy now gets today's NAV (${fmtDay(today)}); it depends on today's ${sym} trading.`;
+    let note = `Gold ${fmtUsd(g.now.price)} at ${fmtClockMs(ge.asOf)} vs ${fmtUsd(ge.ref.price)} at 3:30 pm ${fmtDay(ge.refDay)}` +
+      `${ge.ref.approx ? ' (from futures)' : ''}: ${fmtPct(ge.goldPct)}` +
+      (Math.abs(ge.m - 1) > 1e-9 ? ` × ${fmtNum(ge.m, 2)} (20-day multiplier)` : '') +
+      ` → applied to ${fmtDay(latest.date)}'s NAV ₹${fmtNav(latest.nav)}.`;
+    if (Math.abs(ge.m - 1) > 1e-9) note += ` At 1:1: ₹${fmtNav(ge.nav1)}.`;
+    if (next && next.date === ge.date) note += ` ${sym}-based: ₹${fmtNav(next.nav)} (gold says ${fmtPct((ge.nav / next.nav - 1) * 100)}).`;
+    out.push(box([
+      line(goldLabel(ge.date), `₹${fmtNav(ge.nav)} (${fmtPct(ge.pct, 3)})`, tone(ge.pct), note),
+      line('Total Profit/loss as per US price', `${fmtInr(ge.pl, true)} (${fmtPct(ge.plPct)})`, tone(ge.pl)),
+    ], hlGold));
   } else {
-    text = 'Please wait for next trading 9:15am to even begin speculating';
-    note = `A buy now gets the NAV of ${fmtDayRel(orderDate)}; its trading starts at 9:15 am. ` +
-      (isTradingDay(today) && t < CLOSE ? 'From 3:30 pm the page estimates it from US gold. ' : '') +
-      (isTradingDay(today) && t < s.redeemCutoff ? `Redemptions until ${fmtClock(s.redeemCutoff)} still get today's NAV.` : '');
+    const d = nextTradingDay(lastClosedSession(n));
+    const why = !snap.gold.now ? 'Waiting for the gold price.' : `No gold price recorded at 3:30 pm on ${fmtDay(latest.date)} (the day of the latest NAV).`;
+    out.push(box([line(goldLabel(d), '–', '', why), line('Total Profit/loss as per US price', '–')], false));
   }
-  line('Trading now will entail which NAV ?', esc(text), cls, note);
-  return card('MF details', sub, lines.join(''));
+
+  // "Trading now will entail which NAV ?"
+  const WHAT = { etf: '↑ the Next likely NAV (ETF) above', gold: '↑ the US-gold based NAV above (speculative)', guess: '↑ the US-gold based NAV above (best guess)' };
+  let text, cls = 'gold', note;
+  if (buy.box === redeem.box && buy.navDate === redeem.navDate) {
+    const b = buy.box, d = buy.navDate;
+    if (b === 'etf') {
+      text = '↑ the Next likely NAV above';
+      note = `Today's NAV (${fmtDay(today)}) if you buy before ${fmtClock(s.buyCutoff)} with UPI or direct-settlement netbanking, ` +
+        `or redeem before ${fmtClock(s.redeemCutoff)}. It keeps moving with ${sym} until the 3:30 pm close.`;
+    } else if (b === 'gold') {
+      text = WHAT.gold;
+      note = `A buy or redemption now gets the NAV of ${fmtDayRel(d)}. Until ${sym} trades at 9:15 am${d === today ? '' : ` on ${fmtDay(d)}`}, US gold is the only hint.`;
+    } else if (b === 'guess') {
+      text = WHAT.guess;
+      note = `A buy or redemption now gets the NAV of ${fmtDayRel(d)}, which depends on that day's trading. ` +
+        `Until then US gold is the best guess; the box above switches to ${fmtDay(d)} at 3:30 pm.`;
+    } else {
+      text = 'Please wait for next trading 9:15am to even begin speculating'; cls = '';
+      note = `A buy or redemption now gets the NAV of ${fmtDayRel(d)}.`;
+    }
+  } else {
+    text = `Redeem: ${redeem.box ? WHAT[redeem.box] : 'no estimate yet'}<br>Buy: ${buy.box ? WHAT[buy.box] : 'no estimate yet'}`;
+    note = `Redemptions now get the NAV of ${fmtDayRel(redeem.navDate)}` + (redeem.box === 'etf' ? `, which follows ${sym} until the 3:30 pm close. ` : '. ') +
+      `Buys now get the NAV of ${fmtDayRel(buy.navDate)}` + (buy.box === 'guess' ? ': US gold is the best guess until that day\'s trading; the US-gold box switches to it at 3:30 pm.' : '.');
+  }
+  out.push(line('Trading now will entail which NAV ?', text.includes('<br>') ? text.split('<br>').map(esc).join('<br>') : esc(text), cls, note));
+  return card('MF details', sub, out.join(''));
 }
 
 // ---------- gold spot ----------
@@ -168,33 +204,46 @@ function gold(snap) {
     body += row('Difference', fmtPct(etfPct - ch), tone(etfPct - ch));
   } else if (g.equivalent != null && g.refClose != null && ch != null) {
     const pct = (g.equivalent / g.refClose - 1) * 100;
-    const mult = Math.abs(g.multiplier - 1) > 1e-9 ? ` (× ${fmtNum(g.multiplier, 2)})` : '';
+    const mult = Math.abs(g.multiplier - 1) > 1e-9 ? ` (multiplier ${fmtNum(g.multiplier, 2)})` : '';
     body += row(`${sym} equivalent now${mult}`, `₹${fmtPrice(g.equivalent)} (${fmtPct(pct)})`, tone(pct), true);
     body += muted(`Rough guide to the next opening price at 9:15 am, ${esc(fmtDayRel(nextTradingDay(g.refDay)))}: ${sym} close × gold now ÷ gold at 3:30 pm. ` +
       `Assumes ${sym} moves with US gold; the rupee and Indian demand also move it.`);
   }
   const d0 = g.days[0];
   if (d0) body += p(`${b(`${fmtDay(d0.date)} close vs ${fmtDay(d0.prev)}:`)} ${sym} ${esc(fmtPct(d0.etfPct))}, gold at 3:30 pm ${esc(fmtPct(d0.xauPct))}.`);
+
+  // Trailing 20-day multiplier.
+  const mu = g.mult;
+  if (mu.n) {
+    const used = snap.s.useMultiplier && mu.n >= MIN_PAIRS;
+    let t = `${b('20-day multiplier')} (${mu.n} day-to-day comparisons, ${esc(fmtDay(mu.from))} to ${esc(fmtDay(mu.to))}): ` +
+      `${sym} moved ${b(fmtNum(mu.weighted, 2))} × gold's move, weighted by the size of gold's move; ` +
+      `simple average of the daily ratios ${b(fmtNum(mu.simple, 2))}. `;
+    t += used ? `Applied to the US-gold estimates (${snap.s.multiplierMethod === 'simple' ? 'simple average' : 'weighted'}).`
+      : mu.n < MIN_PAIRS ? `Needs at least ${MIN_PAIRS} comparisons before it can be applied.` : 'Not applied (Settings): estimates assume 1:1.';
+    body += p(t);
+  }
   if (g.days.length) {
-    const rows = g.days.slice(0, 12).map((d) => {
+    const rows = g.days.slice(0, TRAILING_DAYS - 1).map((d) => {
       const o = predictedOpen(d, g.multiplier);
+      const ratio = Math.abs(d.xauPct) > 1e-9 ? d.etfPct / d.xauPct : null;
       return [
         [fmtDayShort(d.date), d.approx ? 'muted' : ''], [fmtPct(d.etfPct), tone(d.etfPct)], [fmtPct(d.xauPct), tone(d.xauPct)],
-        [fmtSigned(d.etfPct - d.xauPct, 2), 'muted'],
+        [ratio == null ? '–' : fmtNum(ratio, 2), Math.abs(d.xauPct) < 0.3 ? 'muted' : ''],
         [o != null && d.etfOpen != null ? `${fmtSigned((o / d.etfPrevClose - 1) * 100, 2)}/${fmtSigned((d.etfOpen / d.etfPrevClose - 1) * 100, 2)}` : '–', 'muted'],
       ];
     });
-    body += muted(`Daily change in %: ${sym} close vs previous close; gold at 3:30 pm IST vs previous 3:30 pm. Open: ${sym}'s 9:15 am open vs previous close, predicted from gold at 9:15 am / actual.`);
-    body += table(['Date', sym, 'Gold', 'Diff', 'Open pred/act'], rows, 'num');
+    body += muted(`Daily change in %: ${sym} close vs previous close; gold at 3:30 pm IST vs previous 3:30 pm. Ratio = ${sym} ÷ gold ` +
+      `(grey when gold moved under 0.3%: small moves make the ratio swing). Open: ${sym}'s 9:15 am open vs previous close, predicted from gold at 9:15 am / actual.`);
+    body += table(['Date', sym, 'Gold', 'Ratio', 'Open pred/act'], rows, 'num');
   }
   const f = g.fit;
   if (f) {
     let t = `Over ${f.n} sessions: ${sym} moved ${fmtNum(f.avgEtfMove, 2)}% a day on average. Assuming it moves 1:1 with gold was off by ${fmtNum(f.err1, 2)}% a day.`;
-    if (f.slope != null && f.n >= 5) t += ` Best-fitting multiplier ${fmtNum(f.slope, 2)}${f.errSlope != null ? ` (off by ${fmtNum(f.errSlope, 2)}%)` : ''}.`;
     if (f.corr != null) t += ` Correlation ${fmtNum(f.corr, 2)}.`;
-    if (f.errMultiplier != null) t += ` Your multiplier ${fmtNum(g.multiplier, 2)}: off by ${fmtNum(f.errMultiplier, 2)}%.`;
+    if (f.errMultiplier != null) t += ` With the multiplier ${fmtNum(g.multiplier, 2)}: off by ${fmtNum(f.errMultiplier, 2)}%.`;
     if (f.errOpen != null) t += ` Opening price from gold at 9:15 am: off by ${fmtNum(f.errOpen, 2)}% on average (${f.nOpen} days).`;
-    if (g.days.some((d) => d.approx)) t += ' Grey dates: gold from COMEX gold futures (Yahoo), loaded once for the days before the server recorded spot prices.';
+    if (g.days.some((d) => d.approx)) t += ' Grey dates: gold from COMEX gold futures (Yahoo), loaded once for the days before the server recorded spot prices; a day is only compared with a day of the same kind.';
     body += muted(esc(t));
   }
   return card('Gold spot (XAU/USD)', 'gold-api.com · trades round the clock · refreshes every 10 s', body);
@@ -235,19 +284,17 @@ function nextNav(snap) {
   const latest = snap.latest, base = snap.base;
   let body = '';
   if (!base) return card('Next NAV (estimate)', '', p(`Needs the ${sym} closing price of ${esc(fmtDay(latest.date))}.`));
-  if (!snap.etfEstimates.length && !snap.usEstimate) {
+  if (!snap.etfEstimates.length) {
     const next = nextTradingDay(latest.date);
     body += p(next === snap.n.date && snap.n.min < OPEN
       ? `${esc(fmtDay(next))} NAV: the projection starts with the first ${sym} trade after 9:15 am.`
       : `${esc(fmtDay(next))} NAV: needs ${sym} prices of ${esc(fmtDay(next))}.`);
   }
-  for (const e of snap.estimates) {
-    const head = e.isToday ? `${fmtDay(e.date)} NAV (live) ≈ ` : e.fromUs ? `${fmtDay(e.date)} NAV (from US gold) ≈ ` : `${fmtDay(e.date)} NAV ≈ `;
+  for (const e of snap.etfEstimates) {
+    const head = e.isToday ? `${fmtDay(e.date)} NAV (live) ≈ ` : `${fmtDay(e.date)} NAV ≈ `;
     body += `<div class="est">${esc(head)}${fmtNav(e.nav)} ${span(fmtPct(e.changePct), tone(e.changePct))}</div>`;
     const asOf = e.asOf ? ` at ${fmtClockMs(e.asOf)}` : '';
-    const src = e.fromUs ? `gold quote${asOf}: ${sym} ≈ ₹${fmtPrice(e.etfPrice)}` : `${BASIS[e.basis]}, ₹${fmtPrice(e.etfPrice)}${asOf}`;
-    body += muted(esc(`From the ${src}, vs ₹${fmtPrice(e.etfPrevClose)} the day before. ` +
-      (e.fromUs ? `Speculative until ${sym} trades on ${fmtDay(e.date)}. ` : '') +
+    body += muted(esc(`From the ${BASIS[e.basis]}, ₹${fmtPrice(e.etfPrice)}${asOf}, vs ₹${fmtPrice(e.etfPrevClose)} the day before. ` +
       `Published by ${fmtClockMs(e.publishBy)} ${fmtDayRel(ist(e.publishBy).date)}.`));
     body += row('P/L at this NAV', `${fmtInr(e.pl, true)} (${fmtPct(e.plPct)})`, tone(e.pl), true);
     if (snap.pl != null) body += row('Change vs current P/L', fmtInr(e.pl - snap.pl, true), tone(e.pl - snap.pl));
@@ -260,6 +307,14 @@ function nextNav(snap) {
   }
   if (snap.accuracy) {
     body += muted(`Check against the last ${snap.accuracy.count} published NAVs: this method was off by ${fmtNum(snap.accuracy.avg, 3)}% on average, at most ${fmtNum(snap.accuracy.max, 3)}%.`);
+  }
+  const ge = snap.goldEst;
+  if (ge) {
+    body += `<div class="est">${esc(`${fmtDay(ge.date)} NAV (from US gold) ≈ `)}${fmtNav(ge.nav)} ${span(fmtPct(ge.pct), tone(ge.pct))}</div>`;
+    body += muted(esc(`${fmtDay(latest.date)}'s NAV × gold now ÷ gold at 3:30 pm ${fmtDay(ge.refDay)}` +
+      (Math.abs(ge.m - 1) > 1e-9 ? `, with the 20-day multiplier ${fmtNum(ge.m, 2)}` : '') +
+      `. Speculative: assumes ${sym} follows gold. Published by ${fmtClockMs(ge.publishBy)} ${fmtDayRel(ist(ge.publishBy).date)}.`));
+    body += row('P/L at this NAV', `${fmtInr(ge.pl, true)} (${fmtPct(ge.plPct)})`, tone(ge.pl), true);
   }
   return card('Next NAV (estimate)', 'Latest NAV × ETF price ÷ ETF close on the latest NAV\'s day', body);
 }

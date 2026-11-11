@@ -47,6 +47,8 @@ export function fmtDay(date) {
   return `${DAYS[dayOfWeek(date)]} ${+d} ${MONTHS[+m - 1]}`;
 }
 export const fmtDayLong = (date) => `${fmtDay(date)} ${date.slice(0, 4)}`;
+/** "Wednesday's (11 Nov)" */
+export function fmtWeekdayOf(date) { const [, m, d] = date.split('-'); return `${DAYS_FULL[dayOfWeek(date)]}'s (${+d} ${MONTHS[+m - 1]})`; }
 export function fmtDayShort(date) { const [, m, d] = date.split('-'); return `${+d} ${MONTHS[+m - 1]}`; }
 
 export function fmtClock(min, sec) {
