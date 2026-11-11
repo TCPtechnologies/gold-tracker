@@ -14,6 +14,7 @@ export const state = {
   candleCache: {},     // date -> [{min,o,h,l,c,v}]
   fetched: {},         // source -> last success (ms)
   errors: {},          // source -> message
+  fails: {},           // source -> failures in a row (a banner shows from the 2nd)
   loading: true,
 };
 
@@ -35,10 +36,12 @@ async function guard(source, fn) {
   try {
     const r = await fn();
     delete state.errors[source];
+    state.fails[source] = 0;
     state.fetched[source] = Date.now();
     return r;
   } catch (e) {
     state.errors[source] = e.message || String(e);
+    state.fails[source] = (state.fails[source] || 0) + 1;
     return null;
   }
 }

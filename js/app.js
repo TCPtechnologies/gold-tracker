@@ -64,9 +64,9 @@ async function every10s(force = false) {
     if (marketWindow || force) {
       jobs.push(pollLive().then((j) => (j && state.server && j.rev > state.server.rev ? refreshServer() : null)));
     }
-    const navDue = !state.navs.length || state.navs[0].date < expectedNavDate(n);
+    const navDue = !state.navs.length || state.navs[0].date < expectedNavDate(n) || state.errors['mfapi.in'];
     if (force || navDue || Date.now() - lastNavPoll > 10 * 60e3) { lastNavPoll = Date.now(); jobs.push(pollNavLatest()); }
-    if (force || Date.now() - lastServer > 60e3) jobs.push(refreshServer());
+    if (force || state.errors.server || Date.now() - lastServer > 60e3) jobs.push(refreshServer());
     await Promise.allSettled(jobs);
   } finally {
     busy = false;

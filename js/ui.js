@@ -66,6 +66,7 @@ function banners(snap) {
   const out = [];
   if (clockShifted()) out.push(['warn', `Test clock: calculations use ${fmtStamp(snap.n.ms)} IST (remove ?at= from the address for real time).`]);
   for (const [k, m] of Object.entries(state.errors)) {
+    if ((state.fails[k] || 0) < 2) continue; // one failed request is retried quietly on the next refresh
     const hint = k === 'server' && /failed to fetch|unexpected token|json/i.test(m)
       ? ' (not reachable, or not set up yet: run setup in the Apps Script editor once)' : '';
     out.push(['err', `${SOURCE_NAMES[k] || k}: ${m}${hint}`]);
