@@ -362,9 +362,8 @@ function status() {
   body += row('NAV, mfapi.in (server)', w(c['mfapi.in']));
   body += row('NAV, AMFI (server)', w(c.AMFI));
   body += row('NAV (this page)', w(state.fetched['mfapi.in']));
-  body += row('NSE daily report (server)', w(c.bhav));
   body += muted('The page reads NAVs from mfapi.in and gold from gold-api.com itself. The server (Google Apps Script, free) reads ' +
-    `${sym} from Yahoo Finance, NAVs from mfapi.in and AMFI, and NSE's daily report on a schedule, and stores history in a Google Sheet. ` +
+    `${sym} from Yahoo Finance (its price after 4 pm is NSE's closing price) and NAVs from mfapi.in and AMFI on a schedule, and stores history in a Google Sheet. ` +
     'While this page is open it refreshes every 10 seconds. Estimates are not advice.');
   body += `<button data-act="toggle-log">${view.showLog ? 'Hide' : 'Show'} activity log</button>`;
   if (view.showLog) {
