@@ -18,6 +18,10 @@ export const state = {
   loading: true,
 };
 
+// mfapi.in's cache serves compressed replies without the CORS header (seen Nov 2026: X-Cache-Status HIT, no
+// Access-Control-Allow-Origin), so browsers reject them. A unique query string is always answered fresh, with it.
+const fresh = (url) => `${url}${url.includes('?') ? '&' : '?'}_=${Date.now()}`;
+
 async function getJson(url, timeoutMs = 20000) {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), timeoutMs);
@@ -79,7 +83,7 @@ export async function loadNavHistory(force = false) {
     }
   } catch { /* ignore a broken cache */ }
   await guard('mfapi.in', async () => {
-    const list = parseMfapi(await getJson(`https://api.mfapi.in/mf/${SCHEME_CODE}`, 30000));
+    const list = parseMfapi(await getJson(fresh(`https://api.mfapi.in/mf/${SCHEME_CODE}`), 30000));
     mergeNavs(list);
     const keep = state.navs.slice(0, 800);
     localStorage.setItem('gt_navs', JSON.stringify({ fetched: Date.now(), data: keep }));
@@ -88,7 +92,7 @@ export async function loadNavHistory(force = false) {
 
 export async function pollNavLatest() {
   await guard('mfapi.in', async () => {
-    const list = parseMfapi(await getJson(`https://api.mfapi.in/mf/${SCHEME_CODE}/latest`));
+    const list = parseMfapi(await getJson(fresh(`https://api.mfapi.in/mf/${SCHEME_CODE}/latest`)));
     const before = state.navs[0]?.date;
     mergeNavs(list);
     if (state.navs[0]?.date !== before) {
