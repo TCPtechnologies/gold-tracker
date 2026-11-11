@@ -65,7 +65,11 @@ const SOURCE_NAMES = {
 function banners(snap) {
   const out = [];
   if (clockShifted()) out.push(['warn', `Test clock: calculations use ${fmtStamp(snap.n.ms)} IST (remove ?at= from the address for real time).`]);
-  for (const [k, m] of Object.entries(state.errors)) out.push(['err', `${SOURCE_NAMES[k] || k}: ${m}`]);
+  for (const [k, m] of Object.entries(state.errors)) {
+    const hint = k === 'server' && /failed to fetch|unexpected token|json/i.test(m)
+      ? ' (not reachable, or not set up yet: run setup in the Apps Script editor once)' : '';
+    out.push(['err', `${SOURCE_NAMES[k] || k}: ${m}${hint}`]);
+  }
   for (const [k, m] of Object.entries(state.server?.errors || {})) out.push(['err', `Server, ${SOURCE_NAMES[k] || k}: ${m}`]);
   const tick = state.server?.checks?.tick;
   if (state.server && (!tick || Date.now() - tick > 15 * 60000)) {
@@ -84,6 +88,7 @@ function summary(snap) {
   const s = snap.s, n = snap.n, latest = snap.latest;
   const q = snap.todayQuote;
   const sub = q && inSession(n) ? `Live · ${sym} trade at ${fmtClockMs(q.time, true)} · refreshes every 10 s`
+    : inSession(n) ? `Market open · waiting for the ${sym} price from the server`
     : q ? `Market closed · last ${sym} trade ${fmtClockMs(q.time, true)}` : 'Market closed';
   const lines = [];
   const line = (label, value, cls = '', note = '', hl = false) =>
